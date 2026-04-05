@@ -1,8 +1,26 @@
 import React from 'react'
-import { useZone } from '../ZoneContext.js'
+import { useZoneContent } from '../ZoneContext.js'
 
-export function ScrollZone(): React.ReactElement {
-  const _zone = useZone('scrollable')
-  // Phase 2 placeholder — actual message content registered via zone.register()
-  return React.createElement('div', { className: 'zone-scrollable' })
+interface ScrollZoneProps {
+  id?: string
+  autoScroll?: boolean
+  maxHeight?: number
+}
+
+export function ScrollZone({ id, autoScroll: _autoScroll, maxHeight }: ScrollZoneProps): React.ReactElement {
+  const content = useZoneContent('scrollable')
+
+  const style: React.CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    overflow: 'auto',
+    ...(maxHeight !== undefined ? { maxHeight } : {}),
+  }
+
+  return (
+    <div id={id} className="zone-scrollable" style={style}>
+      {content}
+    </div>
+  )
 }

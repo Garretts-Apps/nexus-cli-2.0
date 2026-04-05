@@ -175,12 +175,6 @@ export type AppState = DeepImmutable<{
     tools: Tool[]
     commands: Command[]
     resources: Record<string, ServerResource[]>
-    /**
-     * Incremented by /reload-plugins to trigger MCP effects to re-run
-     * and pick up newly-enabled plugin MCP servers. Effects read this
-     * as a dependency; the value itself is not consumed.
-     */
-    pluginReconnectKey: number
   }
   plugins: {
     enabled: LoadedPlugin[]
@@ -468,7 +462,6 @@ export function getDefaultAppState(): AppState {
       tools: [],
       commands: [],
       resources: {},
-      pluginReconnectKey: 0,
     },
     plugins: {
       enabled: [],

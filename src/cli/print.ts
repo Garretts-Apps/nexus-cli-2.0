@@ -1762,7 +1762,7 @@ function runHeadlessStreaming(
   async function refreshPluginState(): Promise<void> {
     // refreshActivePlugins handles the full cache sweep (clearAllCaches),
     // reloads all plugin component loaders, writes AppState.plugins +
-    // AppState.agentDefinitions, registers hooks, and bumps mcp.pluginReconnectKey.
+    // AppState.agentDefinitions, registers hooks, and signals registry reload-all.
     const { agentDefinitions: freshAgentDefs } =
       await refreshActivePlugins(setAppState)
 

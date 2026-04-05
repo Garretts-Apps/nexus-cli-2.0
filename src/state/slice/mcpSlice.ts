@@ -3,13 +3,13 @@ import type { Tool } from '../../Tool.js'
 import type { Command } from '../../commands.js'
 import type { AppState } from '../AppStateStore.js'
 import { createSlice } from './createSlice.js'
+import { registerSlice } from './registry.js'
 
 export interface MCPState {
   clients: MCPServerConnection[]
   tools: Tool[]
   commands: Command[]
   resources: Record<string, ServerResource[]>
-  pluginReconnectKey: number
 }
 
 export const mcpSlice = createSlice<MCPState>({
@@ -19,7 +19,6 @@ export const mcpSlice = createSlice<MCPState>({
     tools: [],
     commands: [],
     resources: {},
-    pluginReconnectKey: 0,
   },
   select: (appState: AppState) => appState.mcp,
   merge: (appState: AppState, newState: MCPState) => ({
@@ -30,3 +29,6 @@ export const mcpSlice = createSlice<MCPState>({
     // MCP slice has no effects — consumers subscribe via watch()
   ],
 })
+
+// Register slice in global registry for effect dispatch
+registerSlice(mcpSlice)

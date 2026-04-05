@@ -12,22 +12,18 @@ import { COMMAND_MESSAGE_TAG, COMMAND_NAME_TAG } from '../../constants/xml.js';
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, type AnalyticsMetadata_I_VERIFIED_THIS_IS_PII_TAGGED, logEvent } from '../../services/analytics/index.js';
 import { getDumpPromptsPath } from '../../services/api/dumpPrompts.js';
-import { buildPostCompactMessages } from '../../services/compact/compact.js';
-import { resetMicrocompactState } from '../../services/compact/microCompact.js';
 import type { Progress as AgentProgress } from '../../tools/AgentTool/AgentTool.js';
 import { runAgent } from '../../tools/AgentTool/runAgent.js';
 import { renderToolUseProgressMessage } from '../../tools/AgentTool/UI.js';
-import type { CommandResultDisplay } from '../../types/command.js';
 import { createAbortController } from '../abortController.js';
 import { getAgentContext } from '../agentContext.js';
 import { createAttachmentMessage, getAttachmentMessages } from '../attachments.js';
 import { logForDebugging } from '../debug.js';
 import { isEnvTruthy } from '../envUtils.js';
-import { AbortError, MalformedCommandError } from '../errors.js';
+import { MalformedCommandError } from '../errors.js';
 import { getDisplayPath } from '../file.js';
 import { extractResultText, prepareForkedCommandContext } from '../forkedAgent.js';
 import { getFsImplementation } from '../fsOperations.js';
-import { isFullscreenEnvEnabled } from '../fullscreen.js';
 import { toArray } from '../generators.js';
 import { registerSkillHooks } from '../hooks/registerSkillHooks.js';
 import { logError } from '../log.js';
@@ -39,6 +35,8 @@ import { hasPermissionsToUseTool } from '../permissions/permissions.js';
 import { isOfficialMarketplaceName, parsePluginIdentifier } from '../plugins/pluginIdentifier.js';
 import { isRestrictedToPluginOnly, isSourceAdminTrusted } from '../settings/pluginOnlyPolicy.js';
 import { parseSlashCommand } from '../slashCommandParsing.js';
+import { getOrCreateBus } from '../../pipeline/CommandBusInstance.js';
+import type { ExecutionContext } from '../../pipeline/CommandContext.js';
 import { sleep } from '../sleep.js';
 import { recordSkillUsage } from '../suggestions/skillUsageTracking.js';
 import { logOTelEvent, redactIfDisabled } from '../telemetry/events.js';
@@ -547,252 +545,103 @@ async function getMessagesForSlashCommand(commandName: string, args: string, set
       command
     };
   }
-  // NEW: Try CommandBus dispatch (dual-run path; always falls through to existing switch)
+  // Primary dispatch: try CommandBus first, fall back to legacy switch if no handler found.
   try {
-    const { getCommandBus } = await import('../../commands.js')
-    const bus = await getCommandBus()
-    if (bus.find(commandName)) {
-      await bus.dispatch({
-        commandName,
+    const bus = getOrCreateBus()
+    const handler = bus.findHandler(commandName)
+    if (handler) {
+      let doneResult: string | undefined
+      let doneOptions: { display?: 'skip' | 'system' | 'user'; shouldQuery?: boolean } | undefined
+      const ctx: ExecutionContext = {
         input: args,
+        commandName,
         appState: context.getAppState(),
-        abortSignal: new AbortController().signal,
-        setMessages: () => { /* not wired in this phase */ },
-        onDone: () => { /* not wired in this phase */ },
-      })
+        abortSignal: context.abortController.signal,
+        onDone: (result, options) => {
+          doneResult = result
+          doneOptions = options
+        },
+      }
+      const handlerResult = await bus.dispatch(ctx)
+
+      if (handlerResult.kind === 'text') {
+        // Map to the same shape as 'local' text result
+        if (doneOptions?.display === 'skip') {
+          return { messages: [], shouldQuery: false, command }
+        }
+        const displayValue = doneResult ?? handlerResult.value
+        const userMessage = createUserMessage({
+          content: prepareUserContent({
+            inputString: formatCommandInputTags(commandName, args),
+            precedingInputBlocks,
+          }),
+        })
+        return {
+          messages: [userMessage, createCommandInputMessage(`<local-command-stdout>${displayValue}</local-command-stdout>`)],
+          shouldQuery: doneOptions?.shouldQuery ?? false,
+          command,
+          resultText: displayValue,
+        }
+      }
+
+      if (handlerResult.kind === 'jsx') {
+        // Map to local-jsx path: render JSX and wait for onDone
+        return new Promise<SlashCommandResult>(resolve => {
+          setToolJSX({
+            jsx: handlerResult.node,
+            shouldHidePromptInput: true,
+            showSpinner: false,
+            isLocalJSXCommand: true,
+          })
+          // onDone was already called by handler; resolve now
+          const display = doneOptions?.display
+          if (display === 'skip') {
+            void resolve({ messages: [], shouldQuery: false, command })
+            return
+          }
+          void resolve({
+            messages: [createUserMessage({
+              content: prepareUserContent({
+                inputString: formatCommandInputTags(commandName, args),
+                precedingInputBlocks,
+              }),
+            }), doneResult
+              ? createUserMessage({ content: `<local-command-stdout>${doneResult}</local-command-stdout>` })
+              : createUserMessage({ content: `<local-command-stdout>${NO_CONTENT_MESSAGE}</local-command-stdout>` })],
+            shouldQuery: doneOptions?.shouldQuery ?? false,
+            command,
+          })
+        })
+      }
+
+      if (handlerResult.kind === 'prompt') {
+        // Map to prompt flow: blocks become user message content
+        return {
+          messages: [createUserMessage({ content: handlerResult.blocks })],
+          shouldQuery: true,
+          command,
+        }
+      }
+
+      // kind === 'skip': command not found
     }
   } catch (_busErr) {
     // Bus dispatch failure must never break existing command execution
   }
 
-  try {
-    switch (command.type) {
-      case 'local-jsx':
-        {
-          return new Promise<SlashCommandResult>(resolve => {
-            let doneWasCalled = false;
-            const onDone = (result?: string, options?: {
-              display?: CommandResultDisplay;
-              shouldQuery?: boolean;
-              metaMessages?: string[];
-              nextInput?: string;
-              submitNextInput?: boolean;
-            }) => {
-              doneWasCalled = true;
-              // If display is 'skip', don't add any messages to the conversation
-              if (options?.display === 'skip') {
-                void resolve({
-                  messages: [],
-                  shouldQuery: false,
-                  command,
-                  nextInput: options?.nextInput,
-                  submitNextInput: options?.submitNextInput
-                });
-                return;
-              }
-
-              // Meta messages are model-visible but hidden from the user
-              const metaMessages = (options?.metaMessages ?? []).map((content: string) => createUserMessage({
-                content,
-                isMeta: true
-              }));
-
-              // In fullscreen the command just showed as a centered modal
-              // pane — the transient notification is enough feedback. The
-              // "❯ /config" + "⎿ dismissed" transcript entries are
-              // type:system subtype:local_command (user-visible but NOT sent
-              // to the model), so skipping them doesn't affect model context.
-              // Outside fullscreen keep them so scrollback shows what ran.
-              // Only skip "<Name> dismissed" modal-close notifications —
-              // commands that early-exit before showing a modal (/remote-parallel-plan
-              // usage, /rename, /proactive) use display:system for actual
-              // output that must reach the transcript.
-              const skipTranscript = isFullscreenEnvEnabled() && typeof result === 'string' && result.endsWith(' dismissed');
-              void resolve({
-                messages: options?.display === 'system' ? skipTranscript ? metaMessages : [createCommandInputMessage(formatCommandInput(command, args)), createCommandInputMessage(`<local-command-stdout>${result}</local-command-stdout>`), ...metaMessages] : [createUserMessage({
-                  content: prepareUserContent({
-                    inputString: formatCommandInput(command, args),
-                    precedingInputBlocks
-                  })
-                }), result ? createUserMessage({
-                  content: `<local-command-stdout>${result}</local-command-stdout>`
-                }) : createUserMessage({
-                  content: `<local-command-stdout>${NO_CONTENT_MESSAGE}</local-command-stdout>`
-                }), ...metaMessages],
-                shouldQuery: options?.shouldQuery ?? false,
-                command,
-                nextInput: options?.nextInput,
-                submitNextInput: options?.submitNextInput
-              });
-            };
-            void command.load().then(mod => mod.call(onDone, {
-              ...context,
-              canUseTool
-            }, args)).then(jsx => {
-              if (jsx == null) return;
-              if (context.options.isNonInteractiveSession) {
-                void resolve({
-                  messages: [],
-                  shouldQuery: false,
-                  command
-                });
-                return;
-              }
-              // Guard: if onDone fired during mod.call() (early-exit path
-              // that calls onDone then returns JSX), skip setToolJSX. This
-              // chain is fire-and-forget — the outer Promise resolves when
-              // onDone is called, so executeUserInput may have already run
-              // its setToolJSX({clearLocalJSX: true}) before we get here.
-              // Setting isLocalJSXCommand after clear leaves it stuck true,
-              // blocking useQueueProcessor and TextInput focus.
-              if (doneWasCalled) return;
-              setToolJSX({
-                jsx,
-                shouldHidePromptInput: true,
-                showSpinner: false,
-                isLocalJSXCommand: true,
-                isImmediate: command.immediate === true
-              });
-            }).catch(e => {
-              // If load()/call() throws and onDone never fired, the outer
-              // Promise hangs forever, leaving queryGuard stuck in
-              // 'dispatching' and deadlocking the queue processor.
-              logError(e);
-              if (doneWasCalled) return;
-              doneWasCalled = true;
-              setToolJSX({
-                jsx: null,
-                shouldHidePromptInput: false,
-                clearLocalJSX: true
-              });
-              void resolve({
-                messages: [],
-                shouldQuery: false,
-                command
-              });
-            });
-          });
-        }
-      case 'local':
-        {
-          const displayArgs = command.isSensitive && args.trim() ? '***' : args;
-          const userMessage = createUserMessage({
-            content: prepareUserContent({
-              inputString: formatCommandInput(command, displayArgs),
-              precedingInputBlocks
-            })
-          });
-          try {
-            const syntheticCaveatMessage = createSyntheticUserCaveatMessage();
-            const mod = await command.load();
-            const result = await mod.call(args, context);
-            if (result.type === 'skip') {
-              return {
-                messages: [],
-                shouldQuery: false,
-                command
-              };
-            }
-
-            // Use discriminated union to handle different result types
-            if (result.type === 'compact') {
-              // Append slash command messages to messagesToKeep so that
-              // attachments and hookResults come after user messages
-              const slashCommandMessages = [syntheticCaveatMessage, userMessage, ...(result.displayText ? [createUserMessage({
-                content: `<local-command-stdout>${result.displayText}</local-command-stdout>`,
-                // --resume looks at latest timestamp message to determine which message to resume from
-                // This is a perf optimization to avoid having to recaculcate the leaf node every time
-                // Since we're creating a bunch of synthetic messages for compact, it's important to set
-                // the timestamp of the last message to be slightly after the current time
-                // This is mostly important for sdk / -p mode
-                timestamp: new Date(Date.now() + 100).toISOString()
-              })] : [])];
-              const compactionResultWithSlashMessages = {
-                ...result.compactionResult,
-                messagesToKeep: [...(result.compactionResult.messagesToKeep ?? []), ...slashCommandMessages]
-              };
-              // Reset microcompact state since full compact replaces all
-              // messages — old tool IDs are no longer relevant. Budget state
-              // (on toolUseContext) needs no reset: stale entries are inert
-              // (UUIDs never repeat, so they're never looked up).
-              resetMicrocompactState();
-              return {
-                messages: buildPostCompactMessages(compactionResultWithSlashMessages),
-                shouldQuery: false,
-                command
-              };
-            }
-
-            // Text result — use system message so it doesn't render as a user bubble
-            return {
-              messages: [userMessage, createCommandInputMessage(`<local-command-stdout>${result.value}</local-command-stdout>`)],
-              shouldQuery: false,
-              command,
-              resultText: result.value
-            };
-          } catch (e) {
-            logError(e);
-            return {
-              messages: [userMessage, createCommandInputMessage(`<local-command-stderr>${String(e)}</local-command-stderr>`)],
-              shouldQuery: false,
-              command
-            };
-          }
-        }
-      case 'prompt':
-        {
-          try {
-            // Check if command should run as forked sub-agent
-            if (command.context === 'fork') {
-              return await executeForkedSlashCommand(command, args, context, precedingInputBlocks, setToolJSX, canUseTool ?? hasPermissionsToUseTool);
-            }
-            return await getMessagesForPromptSlashCommand(command, args, context, precedingInputBlocks, imageContentBlocks, uuid);
-          } catch (e) {
-            // Handle abort errors specially to show proper "Interrupted" message
-            if (e instanceof AbortError) {
-              return {
-                messages: [createUserMessage({
-                  content: prepareUserContent({
-                    inputString: formatCommandInput(command, args),
-                    precedingInputBlocks
-                  })
-                }), createUserInterruptionMessage({
-                  toolUse: false
-                })],
-                shouldQuery: false,
-                command
-              };
-            }
-            return {
-              messages: [createUserMessage({
-                content: prepareUserContent({
-                  inputString: formatCommandInput(command, args),
-                  precedingInputBlocks
-                })
-              }), createUserMessage({
-                content: `<local-command-stderr>${String(e)}</local-command-stderr>`
-              })],
-              shouldQuery: false,
-              command
-            };
-          }
-        }
-    }
-  } catch (e) {
-    if (e instanceof MalformedCommandError) {
-      return {
-        messages: [createUserMessage({
-          content: prepareUserContent({
-            inputString: e.message,
-            precedingInputBlocks
-          })
-        })],
-        shouldQuery: false,
-        command
-      };
-    }
-    throw e;
-  }
+  // No handler found for this command — return not found message
+  return {
+    messages: [createUserMessage({
+      content: prepareUserContent({
+        inputString: `/${commandName}`,
+        precedingInputBlocks,
+      }),
+    }), createUserMessage({
+      content: `Command not found: /${commandName}`,
+    })],
+    shouldQuery: false,
+    command,
+  };
 }
 function formatCommandInput(command: CommandBase, args: string): string {
   return formatCommandInputTags(getCommandName(command), args);

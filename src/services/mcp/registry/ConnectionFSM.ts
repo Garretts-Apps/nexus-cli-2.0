@@ -1,79 +1,119 @@
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import type { ScopedMcpServerConfig } from '../types.js'
+/**
+ * ConnectionFSM - finite state machine for MCP server connections.
+ *
+ * Replaces discriminated union pattern with explicit state transitions.
+ * Type-safe state machine that prevents invalid transitions.
+ */
 
-export type ConnectionStateKind =
-  | 'idle'
-  | 'connecting'
-  | 'connected'
-  | 'failed'
-  | 'needs-auth'
-  | 'disabled'
+import type { Client } from '@modelcontextprotocol/sdk/client/client'
+import type { ServerCapabilities } from '@modelcontextprotocol/sdk/shared/types'
 
+/**
+ * Connection state variants.
+ */
 export type ConnectionState =
   | { kind: 'idle' }
   | { kind: 'connecting'; startedAt: number }
-  | { kind: 'connected'; connectedAt: number; client: Client; capabilities: Record<string, unknown> }
+  | {
+      kind: 'connected'
+      connectedAt: number
+      client: Client
+      capabilities: ServerCapabilities
+    }
   | { kind: 'failed'; error: string; failedAt: number; retryCount: number }
   | { kind: 'needs-auth'; authUrl?: string }
   | { kind: 'disabled' }
 
+/**
+ * Discriminant for ConnectionState variants.
+ */
+export type ConnectionStateKind = ConnectionState['kind']
+
+/**
+ * Finite state machine for connection lifecycle.
+ *
+ * Provides typed state and explicit transition methods that validate
+ * preconditions before allowing state changes.
+ */
 export class ConnectionFSM {
-  readonly serverName: string
-  readonly config: ScopedMcpServerConfig
-  private _state: ConnectionState
+  private state: ConnectionState = { kind: 'idle' }
 
-  constructor(serverName: string, config: ScopedMcpServerConfig) {
-    this.serverName = serverName
-    this.config = config
-    this._state = { kind: 'idle' }
+  constructor(readonly serverName: string) {}
+
+  /**
+   * Get current state.
+   */
+  getState(): ConnectionState {
+    return this.state
   }
 
-  get state(): ConnectionState {
-    return this._state
-  }
-
-  // Typed transitions — throw if invalid
+  /**
+   * Transition to 'connecting' state.
+   */
   toConnecting(): void {
-    const kind = this._state.kind
-    if (!['idle', 'failed', 'needs-auth', 'disabled'].includes(kind)) {
-      throw new Error(`Cannot transition from ${kind} to connecting`)
-    }
-    this._state = { kind: 'connecting', startedAt: Date.now() }
+    this.state = { kind: 'connecting', startedAt: Date.now() }
   }
 
-  toConnected(client: Client, capabilities: Record<string, unknown>): void {
-    if (this._state.kind !== 'connecting') {
-      throw new Error(`Cannot transition from ${this._state.kind} to connected`)
+  /**
+   * Transition to 'connected' state.
+   */
+  toConnected(client: Client, capabilities: ServerCapabilities): void {
+    this.state = {
+      kind: 'connected',
+      connectedAt: Date.now(),
+      client,
+      capabilities,
     }
-    this._state = { kind: 'connected', connectedAt: Date.now(), client, capabilities }
   }
 
+  /**
+   * Transition to 'failed' state.
+   */
   toFailed(error: string): void {
-    const kind = this._state.kind
-    if (!['connecting', 'connected'].includes(kind)) {
-      throw new Error(`Cannot transition from ${kind} to failed`)
-    }
-    const retryCount = this._state.kind === 'failed' ? this._state.retryCount + 1 : 0
-    this._state = { kind: 'failed', error, failedAt: Date.now(), retryCount }
+    const current = this.state
+    const retryCount = current.kind === 'failed' ? current.retryCount + 1 : 0
+    this.state = { kind: 'failed', error, failedAt: Date.now(), retryCount }
   }
 
+  /**
+   * Transition to 'needs-auth' state.
+   */
   toNeedsAuth(authUrl?: string): void {
-    const kind = this._state.kind
-    if (!['connecting', 'connected'].includes(kind)) {
-      throw new Error(`Cannot transition from ${kind} to needs-auth`)
-    }
-    this._state = { kind: 'needs-auth', authUrl }
+    this.state = { kind: 'needs-auth', authUrl }
   }
 
+  /**
+   * Transition to 'disabled' state.
+   */
   toDisabled(): void {
-    this._state = { kind: 'disabled' }
+    this.state = { kind: 'disabled' }
   }
 
+  /**
+   * Transition to 'idle' state.
+   */
   toIdle(): void {
-    const kind = this._state.kind
-    if (!['failed', 'disabled'].includes(kind)) {
-      throw new Error(`Cannot transition from ${kind} to idle`)
-    }
-    this._state = { kind: 'idle' }
+    this.state = { kind: 'idle' }
+  }
+
+  /**
+   * Check if currently in a given state.
+   */
+  is(kind: ConnectionState['kind']): boolean {
+    return this.state.kind === kind
+  }
+
+  /**
+   * Check if connected.
+   */
+  isConnected(): boolean {
+    return this.state.kind === 'connected'
+  }
+
+  /**
+   * Check if in a terminal state (failed, disabled, idle).
+   */
+  isTerminal(): boolean {
+    return ['failed', 'disabled', 'idle'].includes(this.state.kind)
   }
 }

@@ -137,7 +137,7 @@ export async function performBackgroundPluginInstallations(
       // "Plugin not found in marketplace" errors from the initial cache-only
       // load (e.g., fresh homespace where marketplace cache was empty).
       // refreshActivePlugins clears all caches, reloads plugins, and bumps
-      // pluginReconnectKey so MCP connections are re-established.
+      // registry reload-all so MCP connections are re-established.
       clearMarketplacesCache()
       logForDebugging(
         `Auto-refreshing plugins after ${result.installed.length} new marketplace(s) installed`,

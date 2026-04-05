@@ -1,7 +1,8 @@
 import { feature } from 'bun:bundle'
 import { basename } from 'path'
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ConnectionRegistry } from './registry/ConnectionRegistry.js'
+import { setActiveRegistry } from './registry/registrySingleton.js'
 import { debounce } from '../../utils/debounce.js'
 import { getSessionId } from '../../bootstrap/state.js'
 import type { Command } from '../../commands.js'
@@ -92,6 +93,57 @@ const INITIAL_BACKOFF_MS = 1000
 const MAX_BACKOFF_MS = 30000
 
 /**
+ * Adapter: convert FSM ConnectionState + config to MCPServerConnection union.
+ *
+ * Enables Phase 4 to swap the union cleanly — consumers still get the same
+ * discriminated union shape while the registry is the authoritative source.
+ */
+function fsmToServerConnection(
+  serverName: string,
+  state: import('./registry/ConnectionFSM.js').ConnectionState,
+  config: import('./types.js').ScopedMcpServerConfig,
+): MCPServerConnection {
+  switch (state.kind) {
+    case 'connected':
+      return {
+        name: serverName,
+        type: 'connected',
+        client: state.client,
+        capabilities: state.capabilities,
+        config,
+        cleanup: async () => {},
+      }
+    case 'failed':
+      return {
+        name: serverName,
+        type: 'failed',
+        error: state.error,
+        config,
+      }
+    case 'needs-auth':
+      return {
+        name: serverName,
+        type: 'needs-auth',
+        config,
+      }
+    case 'disabled':
+      return {
+        name: serverName,
+        type: 'disabled',
+        config,
+      }
+    case 'connecting':
+    case 'idle':
+    default:
+      return {
+        name: serverName,
+        type: 'pending',
+        config,
+      }
+  }
+}
+
+/**
  * Create a unique key for a plugin error to enable deduplication
  */
 function getErrorKey(error: PluginError): string {
@@ -148,11 +200,11 @@ export function useManageMCPConnections(
 ) {
   const store = useAppStateStore()
   const _authVersion = useAppState(s => s.authVersion)
-  // Incremented by /reload-plugins (refreshActivePlugins) to pick up newly
-  // enabled plugin MCP servers. getClaudeCodeMcpConfigs() reads loadAllPlugins()
-  // which has been cleared by refreshActivePlugins, so the effects below see
-  // fresh plugin data on re-run.
-  const _pluginReconnectKey = useAppState(s => s.mcp.pluginReconnectKey)
+  // Local counter incremented by registry 'reload-all' events (fired by
+  // refreshActivePlugins via signalPluginReload). Replaces the former
+  // AppState mcp.pluginReconnectKey — effects below include this in their
+  // dependency arrays so they re-run when plugins change.
+  const [_pluginReloadKey, setPluginReloadKey] = useState(0)
   const setAppState = useSetAppState()
 
   // Track active reconnection attempts to allow cancellation
@@ -204,6 +256,21 @@ export function useManageMCPConnections(
 
   // Registry: central source of truth for MCP connection state
   const registryRef = useRef<ConnectionRegistry>(new ConnectionRegistry())
+
+  // Expose registry singleton so non-React code (refreshActivePlugins) can
+  // signal plugin reload via signalPluginReload(). Cleaned up on unmount.
+  useEffect(() => {
+    setActiveRegistry(registryRef.current)
+    return () => setActiveRegistry(null)
+  }, [])
+
+  // Subscribe to registry 'reload-all' events (fired by signalPluginReload)
+  // and bump the local counter so effects re-run with fresh plugin data.
+  useEffect(() => {
+    return registryRef.current.on('reload-all', () => {
+      setPluginReloadKey(k => k + 1)
+    })
+  }, [])
 
   // Batched MCP state updates: queue individual server updates and flush them
   // in a single setAppState call. debounce coalesces updates arriving within
@@ -317,6 +384,34 @@ export function useManageMCPConnections(
     },
     [flushPendingUpdates],
   )
+
+  // Wire registry lifecycle events to updateServer so the UI reflects FSM state.
+  // 'connected' → update UI with connected server
+  // 'failed'    → show error state
+  // 'needs-auth' → prompt for auth
+  useEffect(() => {
+    const registry = registryRef.current
+    const unsubConnected = registry.on('connected', ({ serverName, state }) => {
+      const entry = registry.get(serverName)
+      if (!entry) return
+      updateServer(fsmToServerConnection(serverName, state, entry.config))
+    })
+    const unsubFailed = registry.on('failed', ({ serverName, state }) => {
+      const entry = registry.get(serverName)
+      if (!entry) return
+      updateServer(fsmToServerConnection(serverName, state, entry.config))
+    })
+    const unsubNeedsAuth = registry.on('needs-auth', ({ serverName, state }) => {
+      const entry = registry.get(serverName)
+      if (!entry) return
+      updateServer(fsmToServerConnection(serverName, state, entry.config))
+    })
+    return () => {
+      unsubConnected()
+      unsubFailed()
+      unsubNeedsAuth()
+    }
+  }, [updateServer])
 
   const onConnectionAttempt = useCallback(
     ({
@@ -774,7 +869,7 @@ export function useManageMCPConnections(
   )
 
   // Initialize all servers to pending state if they don't exist in appState.
-  // Re-runs on session change (/clear) and on /reload-plugins (pluginReconnectKey).
+  // Re-runs on session change (/clear) and on /reload-plugins (registry reload-all).
   // On plugin reload, also disconnects stale plugin MCP servers (scope 'dynamic')
   // that no longer appear in configs — prevents ghost tools from disabled plugins.
   // Skip claude.ai dedup here to avoid blocking on the network fetch; the connect
@@ -861,7 +956,7 @@ export function useManageMCPConnections(
     dynamicMcpConfig,
     setAppState,
     sessionId,
-    _pluginReconnectKey,
+    _pluginReloadKey,
   ])
 
   // Load MCP configs and connect to servers
@@ -1031,7 +1126,7 @@ export function useManageMCPConnections(
     setAppState,
     _authVersion,
     sessionId,
-    _pluginReconnectKey,
+    _pluginReloadKey,
   ])
 
   // Cleanup all timers on unmount

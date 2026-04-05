@@ -1,6 +1,8 @@
 import type { AppState } from '../AppStateStore.js'
 import type { ModelSetting } from '../../utils/model/model.js'
-import { createSlice } from './createSlice.js'
+import { createSlice, type SliceEffect } from './createSlice.js'
+import { setMainLoopModelOverride } from '../sessionConfig.js'
+import { updateSettingsForSource } from '../../utils/settings/settings.js'
 
 export interface SessionState {
   mainLoopModel: ModelSetting
@@ -8,6 +10,22 @@ export interface SessionState {
   authVersion: number
   assistantModeEnabled: boolean
 }
+
+const effects: SliceEffect<SessionState>[] = [
+  {
+    name: 'persist_main_loop_model',
+    when: (old, neu) => old.mainLoopModel !== neu.mainLoopModel,
+    run: (old, neu) => {
+      if (neu.mainLoopModel === null) {
+        updateSettingsForSource('userSettings', { model: undefined })
+        setMainLoopModelOverride(null)
+      } else {
+        updateSettingsForSource('userSettings', { model: neu.mainLoopModel })
+        setMainLoopModelOverride(neu.mainLoopModel)
+      }
+    },
+  },
+]
 
 export const sessionSlice = createSlice<SessionState>({
   key: 'session',
@@ -30,8 +48,9 @@ export const sessionSlice = createSlice<SessionState>({
     authVersion: newState.authVersion,
     assistantModeEnabled: newState.assistantModeEnabled,
   }),
-  effects: [
-    // Model override effects are handled in onChangeAppState for backward compatibility.
-    // Phase 3 will migrate them here incrementally.
-  ],
+  effects,
 })
+
+// Register slice in global registry for effect dispatch
+import { registerSlice } from './registry.js'
+registerSlice(sessionSlice)

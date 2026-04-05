@@ -1,8 +1,25 @@
 import React from 'react'
-import { useZone } from '../ZoneContext.js'
+import { useZoneContent } from '../ZoneContext.js'
 
-export function FooterZone(): React.ReactElement {
-  const _zone = useZone('footer')
-  // Phase 2 placeholder — PromptInput registers here in Phase 4
-  return React.createElement('div', { className: 'zone-footer' })
+interface FooterZoneProps {
+  id?: string
+  height?: number
+  focusable?: boolean
+}
+
+export function FooterZone({ id, height }: FooterZoneProps): React.ReactElement {
+  const content = useZoneContent('footer')
+
+  const style: React.CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    flexShrink: 0,
+    ...(height !== undefined ? { height } : {}),
+  }
+
+  return (
+    <div id={id} className="zone-footer" style={style}>
+      {content}
+    </div>
+  )
 }

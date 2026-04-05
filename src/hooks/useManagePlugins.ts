@@ -47,7 +47,7 @@ export function useManagePlugins({
   // post-mount refresh goes through /reload-plugins → refreshActivePlugins().
   // Unlike refreshActivePlugins, this also runs delisting enforcement and
   // flagged-plugin notifications (session-start concerns), and does NOT bump
-  // mcp.pluginReconnectKey (MCP effects fire on their own mount).
+  // registry reload-all (MCP effects fire on their own mount).
   const initialPluginLoad = useCallback(async () => {
     try {
       // Load all plugins - capture errors array

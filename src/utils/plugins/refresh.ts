@@ -24,6 +24,7 @@ import type { AppState } from '../../state/AppState.js'
 import type { AgentDefinitionsResult } from '../../tools/AgentTool/loadAgentsDir.js'
 import { getAgentDefinitionsWithOverrides } from '../../tools/AgentTool/loadAgentsDir.js'
 import type { PluginError } from '../../types/plugin.js'
+import { signalPluginReload } from '../../services/mcp/registry/registrySingleton.js'
 import { logForDebugging } from '../debug.js'
 import { errorMessage } from '../errors.js'
 import { logError } from '../log.js'
@@ -63,8 +64,8 @@ export type RefreshActivePluginsResult = {
  * from downstream memoized loaders).
  *
  * Consumes plugins.needsRefresh (sets to false).
- * Increments mcp.pluginReconnectKey so useManageMCPConnections effects re-run
- * and pick up new plugin MCP servers.
+ * Signals the ConnectionRegistry to reload all MCP connections so
+ * useManageMCPConnections effects re-run and pick up new plugin MCP servers.
  *
  * LSP: if plugins now contribute LSP servers, reinitializeLspServerManager()
  * re-reads config. Servers are lazy-started so this is just config parsing.
@@ -97,7 +98,7 @@ export async function refreshActivePlugins(
   // cache slots NOT filled by loadAllPlugins() — they're written later by
   // extractMcpServersFromPlugins/getPluginLspServers, which races with this.
   // Loading here gives accurate metrics AND warms the cache slots so the MCP
-  // connection manager (triggered by pluginReconnectKey bump) sees the servers
+  // connection manager (triggered by registry reload-all signal) sees the servers
   // without re-parsing manifests. Errors are pushed to the shared errors array.
   const [mcpCounts, lspCounts] = await Promise.all([
     Promise.all(
@@ -131,11 +132,12 @@ export async function refreshActivePlugins(
       needsRefresh: false,
     },
     agentDefinitions,
-    mcp: {
-      ...prev.mcp,
-      pluginReconnectKey: prev.mcp.pluginReconnectKey + 1,
-    },
   }))
+
+  // Signal the ConnectionRegistry to re-initialize MCP connections.
+  // Replaces the former mcp.pluginReconnectKey++ pattern — the registry
+  // emits 'reload-all' which useManageMCPConnections subscribes to.
+  signalPluginReload()
 
   // Re-initialize LSP manager so newly-loaded plugin LSP servers are picked
   // up. No-op if LSP was never initialized (headless subcommand path).

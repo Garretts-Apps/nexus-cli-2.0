@@ -1,78 +1,100 @@
-import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/index.mjs'
-import type { ExecutionContext } from './CommandContext.js'
-import type { Middleware } from './CommandMiddleware.js'
+/**
+ * CommandBus - middleware-style command handler registry and dispatcher.
+ *
+ * Replaces the monolithic withRetry pattern with a decoupled, composable
+ * handler-based architecture where each command is a self-describing handler.
+ */
 
-export interface CommandHandler {
-  readonly name: string
-  readonly aliases?: string[]
-  readonly description: string
-  readonly priority: number
-  readonly isEnabled?: () => boolean
-  readonly availability?: string[]
+import type React from 'react'
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages'
+import type { ExecutionContext } from './CommandContext'
 
-  matches(name: string): boolean
-  execute(ctx: ExecutionContext): Promise<HandlerResult>
-  render?(ctx: ExecutionContext): Promise<React.ReactNode | null>
-}
-
+/**
+ * Result variants from command execution.
+ */
 export type HandlerResult =
   | { kind: 'text'; value: string }
   | { kind: 'jsx'; node: React.ReactNode }
   | { kind: 'prompt'; blocks: ContentBlockParam[] }
   | { kind: 'skip' }
 
+/**
+ * Command handler that processes user input.
+ *
+ * Self-describes execution, enabling type-based dispatch without
+ * discriminated unions or switch statements.
+ */
+export interface CommandHandler {
+  /** Unique handler identifier */
+  readonly name: string
+  /** Command aliases (shortcuts) */
+  readonly aliases?: string[]
+  /** Human-readable description */
+  readonly description: string
+  /** Priority for dispatch ordering (higher = earlier) */
+  readonly priority: number
+  /** Optional enablement check */
+  readonly isEnabled?: () => boolean
+  /** Check if this handler should process the input */
+  matches(name: string): boolean
+  /** Execute the command */
+  execute(ctx: ExecutionContext): Promise<HandlerResult>
+  /** Optional: render UI for this command */
+  render?(ctx: ExecutionContext): Promise<React.ReactNode | null>
+}
+
+/**
+ * CommandBus - registry and dispatcher for command handlers.
+ */
 export class CommandBus {
   private handlers: Map<string, CommandHandler> = new Map()
-  private middlewares: Middleware[] = []
 
+  /**
+   * Register a handler.
+   */
   register(handler: CommandHandler): void {
     this.handlers.set(handler.name, handler)
   }
 
-  registerMany(handlers: CommandHandler[]): void {
-    handlers.forEach(h => this.register(h))
+  /**
+   * Unregister a handler by name.
+   */
+  unregister(name: string): void {
+    this.handlers.delete(name)
   }
 
-  use(middleware: Middleware): void {
-    this.middlewares.push(middleware)
+  /**
+   * Get a handler by name.
+   */
+  get(name: string): CommandHandler | undefined {
+    return this.handlers.get(name)
   }
 
+  /**
+   * Get all registered handlers, sorted by priority.
+   */
+  getAll(): CommandHandler[] {
+    return Array.from(this.handlers.values()).sort((a, b) => b.priority - a.priority)
+  }
+
+  /**
+   * Find a handler that matches the given name.
+   *
+   * Searches in priority order (highest first).
+   */
+  findHandler(name: string): CommandHandler | undefined {
+    const sorted = this.getAll()
+    return sorted.find((h) => h.isEnabled?.() !== false && h.matches(name))
+  }
+
+  /**
+   * Dispatch a command to the appropriate handler.
+   */
   async dispatch(ctx: ExecutionContext): Promise<HandlerResult> {
-    const handler = this.find(ctx.commandName)
-    if (!handler) return { kind: 'skip' }
-
-    let result: HandlerResult = { kind: 'skip' }
-    const executeHandler = async (): Promise<HandlerResult> => {
-      result = await handler.execute(ctx)
-      return result
+    const handler = this.findHandler(ctx.commandName)
+    if (!handler) {
+      return { kind: 'skip' }
     }
-
-    // Chain middlewares
-    const middlewaresCopy = [...this.middlewares].reverse()
-    let chain: () => Promise<HandlerResult> = executeHandler
-    for (const middleware of middlewaresCopy) {
-      const next = chain
-      const currentMiddleware = middleware
-      chain = async () => currentMiddleware(ctx, handler, next)
-    }
-
-    await chain()
-    return result
+    return handler.execute(ctx)
   }
-
-  find(name: string): CommandHandler | undefined {
-    return Array.from(this.handlers.values())
-      .sort((a, b) => b.priority - a.priority)
-      .find(h => h.matches(name))
-  }
-
-  list(): CommandHandler[] {
-    return Array.from(this.handlers.values()).sort(
-      (a, b) => b.priority - a.priority,
-    )
-  }
-}
-
-export function createCommandBus(): CommandBus {
-  return new CommandBus()
 }
