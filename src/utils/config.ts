@@ -266,9 +266,9 @@ export type GlobalConfig = {
     [tipId: string]: number // Key is tipId, value is the numStartups when tip was last shown
   }
 
-  // /buddy companion soul — bones regenerated from userId on read. See src/buddy/.
-  companion?: import('../buddy/types.js').StoredCompanion
-  companionMuted?: boolean
+  // /guide execution profile state — core regenerated from userId on read. See src/context_guide/.
+  contextGuide?: import('../context_guide/types.js').StoredGuideState
+  contextGuideMuted?: boolean
 
   // Feedback survey tracking
   feedbackSurveyState?: {

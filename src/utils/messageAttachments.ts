@@ -50,7 +50,7 @@ import { TASK_CREATE_TOOL_NAME } from '../tools/TaskCreateTool/constants.js'
 import { TASK_OUTPUT_TOOL_NAME } from '../tools/TaskOutputTool/constants.js'
 import { TASK_UPDATE_TOOL_NAME } from '../tools/TaskUpdateTool/constants.js'
 import type { MessageOrigin, NormalizedMessage, UserMessage } from '../types/message.js'
-import { companionIntroText } from '../buddy/prompt.js'
+import { contextGuideIntroText } from '../context_guide/guidance_prompts.js'
 import {
   getPlanModeV2AgentCount,
   getPlanModeV2ExploreAgentCount,
@@ -1270,10 +1270,10 @@ You have exited auto mode. The user may now want to interact more directly. You 
         createUserMessage({ content: parts.join('\n\n'), isMeta: true }),
       ])
     }
-    case 'companion_intro': {
+    case 'context_guide_intro': {
       return wrapMessagesInSystemReminder([
         createUserMessage({
-          content: companionIntroText(attachment.name, attachment.species),
+          content: contextGuideIntroText(attachment.profile, attachment.philosophy),
           isMeta: true,
         }),
       ])

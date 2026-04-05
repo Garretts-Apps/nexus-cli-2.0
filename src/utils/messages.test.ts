@@ -20,8 +20,9 @@ vi.mock('src/services/analytics/growthbook.js', () => ({
   checkStatsigFeatureGate_CACHED_MAY_BE_STALE: vi.fn(),
   getFeatureValue_CACHED_MAY_BE_STALE: vi.fn(() => false),
 }))
-vi.mock('../buddy/prompt.js', () => ({
-  companionIntroText: '',
+vi.mock('../context_guide/guidance_prompts.js', () => ({
+  contextGuideIntroText: '',
+  getContextGuideIntroAttachment: () => [],
 }))
 vi.mock('../constants/messages.js', () => ({
   NO_CONTENT_MESSAGE: '(no content)',
