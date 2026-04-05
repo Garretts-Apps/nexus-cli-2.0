@@ -16,9 +16,9 @@ import type {
   BetaToolUnion,
   BetaUsage,
   BetaMessageParam as MessageParam,
-} from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
-import type { TextBlockParam } from '@anthropic-ai/sdk/resources/index.mjs'
-import type { Stream } from '@anthropic-ai/sdk/streaming.mjs'
+  TextBlockParam,
+  Stream,
+} from './types'
 import { randomUUID } from 'crypto'
 import {
   getAPIProvider,
@@ -163,8 +163,9 @@ import {
   shouldIncludeFirstPartyOnlyBetas,
   shouldUseGlobalCacheScope,
 } from 'src/utils/betas.js'
-import { CLAUDE_IN_CHROME_MCP_SERVER_NAME } from 'src/utils/claudeInChrome/common.js'
-import { CHROME_TOOL_SEARCH_INSTRUCTIONS } from 'src/utils/claudeInChrome/prompt.js'
+// Stubs: claudeInChrome feature has been removed
+const CLAUDE_IN_CHROME_MCP_SERVER_NAME = 'claude-in-chrome-deprecated'
+const CHROME_TOOL_SEARCH_INSTRUCTIONS = ''
 import { getMaxThinkingTokensForModel } from 'src/utils/context.js'
 import { logForDebugging } from 'src/utils/debug.js'
 import { logForDiagnosticsNoPII } from 'src/utils/diagLogs.js'
