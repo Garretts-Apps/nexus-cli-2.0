@@ -256,3 +256,6 @@ export interface MCPCliState {
   resources: Record<string, ServerResource[]>
   normalizedNames?: Record<string, string> // Maps normalized names to original names
 }
+
+// Re-export registry types for consumers
+export { type ConnectionState, type ConnectionStateKind } from './registry/ConnectionFSM.js'

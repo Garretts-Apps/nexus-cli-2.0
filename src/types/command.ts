@@ -205,6 +205,13 @@ export type CommandBase = {
 export type Command = CommandBase &
   (PromptCommand | LocalCommand | LocalJSXCommand)
 
+// NEW: Handler result type for the CommandBus pipeline (additive, no breaking changes)
+export type HandlerResult =
+  | { kind: 'text'; value: string }
+  | { kind: 'jsx'; node: React.ReactNode }
+  | { kind: 'prompt'; blocks: ContentBlockParam[] }
+  | { kind: 'skip' }
+
 /** Resolves the user-visible name, falling back to `cmd.name` when not overridden. */
 export function getCommandName(cmd: CommandBase): string {
   return cmd.userFacingName?.() ?? cmd.name

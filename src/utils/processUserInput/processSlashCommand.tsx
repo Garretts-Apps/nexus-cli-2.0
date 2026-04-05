@@ -547,6 +547,24 @@ async function getMessagesForSlashCommand(commandName: string, args: string, set
       command
     };
   }
+  // NEW: Try CommandBus dispatch (dual-run path; always falls through to existing switch)
+  try {
+    const { getCommandBus } = await import('../../commands.js')
+    const bus = await getCommandBus()
+    if (bus.find(commandName)) {
+      await bus.dispatch({
+        commandName,
+        input: args,
+        appState: context.getAppState(),
+        abortSignal: new AbortController().signal,
+        setMessages: () => { /* not wired in this phase */ },
+        onDone: () => { /* not wired in this phase */ },
+      })
+    }
+  } catch (_busErr) {
+    // Bus dispatch failure must never break existing command execution
+  }
+
   try {
     switch (command.type) {
       case 'local-jsx':

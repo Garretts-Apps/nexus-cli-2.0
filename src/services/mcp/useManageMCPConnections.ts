@@ -1,6 +1,8 @@
 import { feature } from 'bun:bundle'
 import { basename } from 'path'
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { ConnectionRegistry } from './registry/ConnectionRegistry.js'
+import { debounce } from '../../utils/debounce.js'
 import { getSessionId } from '../../bootstrap/state.js'
 import type { Command } from '../../commands.js'
 import type { Tool } from '../../Tool.js'
@@ -200,10 +202,14 @@ export function useManageMCPConnections(
   }, [setAppState])
   const { addNotification } = useNotifications()
 
+  // Registry: central source of truth for MCP connection state
+  const registryRef = useRef<ConnectionRegistry>(new ConnectionRegistry())
+
   // Batched MCP state updates: queue individual server updates and flush them
-  // in a single setAppState call via setTimeout. Using a time-based window
-  // (instead of queueMicrotask) ensures updates are batched even when
-  // connection callbacks arrive at different times due to network I/O.
+  // in a single setAppState call. debounce coalesces updates arriving within
+  // MCP_BATCH_FLUSH_MS even when connection callbacks arrive at different times
+  // due to network I/O (replaces the previous pendingUpdatesRef + flushTimerRef
+  // + setTimeout pattern).
   const MCP_BATCH_FLUSH_MS = 16
   type PendingUpdate = MCPServerConnection & {
     tools?: Tool[]
@@ -211,98 +217,103 @@ export function useManageMCPConnections(
     resources?: ServerResource[]
   }
   const pendingUpdatesRef = useRef<PendingUpdate[]>([])
-  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const flushPendingUpdates = useCallback(() => {
-    flushTimerRef.current = null
-    const updates = pendingUpdatesRef.current
-    if (updates.length === 0) return
-    pendingUpdatesRef.current = []
+  const flushPendingUpdates = useMemo(
+    () =>
+      debounce(() => {
+        const updates = pendingUpdatesRef.current
+        if (updates.length === 0) return
+        pendingUpdatesRef.current = []
 
-    setAppState(prevState => {
-      let mcp = prevState.mcp
+        setAppState(prevState => {
+          let mcp = prevState.mcp
 
-      for (const update of updates) {
-        const {
-          tools: rawTools,
-          commands: rawCmds,
-          resources: rawRes,
-          ...client
-        } = update
-        const tools =
-          client.type === 'disabled' || client.type === 'failed'
-            ? (rawTools ?? [])
-            : rawTools
-        const commands =
-          client.type === 'disabled' || client.type === 'failed'
-            ? (rawCmds ?? [])
-            : rawCmds
-        const resources =
-          client.type === 'disabled' || client.type === 'failed'
-            ? (rawRes ?? [])
-            : rawRes
+          for (const update of updates) {
+            const {
+              tools: rawTools,
+              commands: rawCmds,
+              resources: rawRes,
+              ...client
+            } = update
+            const tools =
+              client.type === 'disabled' || client.type === 'failed'
+                ? (rawTools ?? [])
+                : rawTools
+            const commands =
+              client.type === 'disabled' || client.type === 'failed'
+                ? (rawCmds ?? [])
+                : rawCmds
+            const resources =
+              client.type === 'disabled' || client.type === 'failed'
+                ? (rawRes ?? [])
+                : rawRes
 
-        const prefix = getMcpPrefix(client.name)
-        const existingClientIndex = mcp.clients.findIndex(
-          c => c.name === client.name,
-        )
+            const prefix = getMcpPrefix(client.name)
+            const existingClientIndex = mcp.clients.findIndex(
+              c => c.name === client.name,
+            )
 
-        const updatedClients =
-          existingClientIndex === -1
-            ? [...mcp.clients, client]
-            : mcp.clients.map(c => (c.name === client.name ? client : c))
+            const updatedClients =
+              existingClientIndex === -1
+                ? [...mcp.clients, client]
+                : mcp.clients.map(c => (c.name === client.name ? client : c))
 
-        const updatedTools =
-          tools === undefined
-            ? mcp.tools
-            : [...reject(mcp.tools, t => t.name?.startsWith(prefix)), ...tools]
+            const updatedTools =
+              tools === undefined
+                ? mcp.tools
+                : [
+                    ...reject(mcp.tools, t => t.name?.startsWith(prefix)),
+                    ...tools,
+                  ]
 
-        const updatedCommands =
-          commands === undefined
-            ? mcp.commands
-            : [
-                ...reject(mcp.commands, c =>
-                  commandBelongsToServer(c, client.name),
-                ),
-                ...commands,
-              ]
+            const updatedCommands =
+              commands === undefined
+                ? mcp.commands
+                : [
+                    ...reject(mcp.commands, c =>
+                      commandBelongsToServer(c, client.name),
+                    ),
+                    ...commands,
+                  ]
 
-        const updatedResources =
-          resources === undefined
-            ? mcp.resources
-            : {
-                ...mcp.resources,
-                ...(resources.length > 0
-                  ? { [client.name]: resources }
-                  : omit(mcp.resources, client.name)),
-              }
+            const updatedResources =
+              resources === undefined
+                ? mcp.resources
+                : {
+                    ...mcp.resources,
+                    ...(resources.length > 0
+                      ? { [client.name]: resources }
+                      : omit(mcp.resources, client.name)),
+                  }
 
-        mcp = {
-          ...mcp,
-          clients: updatedClients,
-          tools: updatedTools,
-          commands: updatedCommands,
-          resources: updatedResources,
-        }
-      }
+            mcp = {
+              ...mcp,
+              clients: updatedClients,
+              tools: updatedTools,
+              commands: updatedCommands,
+              resources: updatedResources,
+            }
+          }
 
-      return { ...prevState, mcp }
-    })
-  }, [setAppState])
+          return { ...prevState, mcp }
+        })
+      }, MCP_BATCH_FLUSH_MS),
+    [setAppState],
+  )
+
+  // Subscribe to registry tools:changed events so tool updates trigger a flush
+  useEffect(() => {
+    return registryRef.current.on('tools:changed', () => flushPendingUpdates())
+  }, [flushPendingUpdates])
 
   // Update server state, tools, commands, and resources.
   // When tools, commands, or resources are undefined, the existing values are preserved.
   // When type is 'disabled' or 'failed', tools/commands/resources are automatically cleared.
-  // Updates are batched via setTimeout to coalesce updates arriving within MCP_BATCH_FLUSH_MS.
+  // Updates are batched via debounce to coalesce updates arriving within MCP_BATCH_FLUSH_MS.
   const updateServer = useCallback(
     (update: PendingUpdate) => {
       pendingUpdatesRef.current.push(update)
-      if (flushTimerRef.current === null) {
-        flushTimerRef.current = setTimeout(
-          flushPendingUpdates,
-          MCP_BATCH_FLUSH_MS,
-        )
-      }
+      flushPendingUpdates()
     },
     [flushPendingUpdates],
   )
@@ -1032,11 +1043,7 @@ export function useManageMCPConnections(
       }
       timers.clear()
       // Flush any pending batched MCP updates before unmount
-      if (flushTimerRef.current !== null) {
-        clearTimeout(flushTimerRef.current)
-        flushTimerRef.current = null
-        flushPendingUpdates()
-      }
+      flushPendingUpdates.flush()
     }
   }, [flushPendingUpdates])
 

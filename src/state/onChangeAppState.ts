@@ -1,3 +1,4 @@
+import { ALL_SLICES } from './slice/registry.js'
 import { setMainLoopModelOverride } from './sessionConfig.js'
 import {
   clearApiKeyHelperCache,
@@ -47,6 +48,18 @@ export function onChangeAppState({
   newState: AppState
   oldState: AppState
 }) {
+  // NEW: Slice effect runner (dual-run — existing logic below is preserved)
+  for (const slice of ALL_SLICES) {
+    const oldSlice = slice.select(oldState)
+    const newSlice = slice.select(newState)
+    if (Object.is(oldSlice, newSlice)) continue
+    for (const effect of slice.effects) {
+      if (effect.when(oldSlice, newSlice)) {
+        effect.run(oldSlice, newSlice)
+      }
+    }
+  }
+
   // toolPermissionContext.mode — single choke point for CCR/SDK mode sync.
   //
   // Prior to this block, mode changes were relayed to CCR by only 2 of 8+

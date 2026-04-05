@@ -536,6 +536,7 @@ export function clearCommandsCache(): void {
   clearPluginCommandCache()
   clearPluginSkillsCache()
   clearSkillCaches()
+  clearCommandBusCache()
 }
 
 /**
@@ -699,6 +700,47 @@ export function findCommand(
 
 export function hasCommand(commandName: string, commands: Command[]): boolean {
   return findCommand(commandName, commands) !== undefined
+}
+
+// NEW: Command Bus factory (additive, no breaking changes)
+// Lazily initializes a CommandBus backed by the current COMMANDS() set.
+// The bus is re-created each call so it always reflects the latest memoized command list.
+let _commandBusCache: import('./pipeline/CommandBus.js').CommandBus | null = null
+
+export async function getCommandBus(): Promise<
+  import('./pipeline/CommandBus.js').CommandBus
+> {
+  if (_commandBusCache) return _commandBusCache
+  const { createCommandBus } = await import('./pipeline/CommandBus.js')
+  const { LocalHandlerAdapter } = await import(
+    './pipeline/handlers/LocalHandlerAdapter.js'
+  )
+  const { JSXHandlerAdapter } = await import(
+    './pipeline/handlers/JSXHandlerAdapter.js'
+  )
+  const { PromptHandlerAdapter } = await import(
+    './pipeline/handlers/PromptHandlerAdapter.js'
+  )
+  const bus = createCommandBus()
+  const existingCommands = COMMANDS()
+  const handlers = existingCommands
+    .map(cmd => {
+      if (cmd.type === 'local') return new LocalHandlerAdapter(cmd)
+      if (cmd.type === 'local-jsx') return new JSXHandlerAdapter(cmd)
+      if (cmd.type === 'prompt') return new PromptHandlerAdapter(cmd)
+      return null
+    })
+    .filter(
+      (h): h is NonNullable<typeof h> => h !== null,
+    )
+  bus.registerMany(handlers)
+  _commandBusCache = bus
+  return bus
+}
+
+/** Invalidate the command bus cache (e.g. after clearCommandsCache). */
+export function clearCommandBusCache(): void {
+  _commandBusCache = null
 }
 
 export function getCommand(commandName: string, commands: Command[]): Command {
