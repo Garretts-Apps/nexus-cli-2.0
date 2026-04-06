@@ -1,0 +1,5 @@
+
+# Local state files
+.copilot-logs/
+.omc/
+node_modules/
