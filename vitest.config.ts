@@ -5,6 +5,7 @@ export default defineConfig({
   resolve: {
     alias: {
       src: resolve(__dirname, 'src'),
+      'bun:bundle': resolve(__dirname, 'src/__mocks__/bun-bundle.ts'),
     },
   },
   test: {

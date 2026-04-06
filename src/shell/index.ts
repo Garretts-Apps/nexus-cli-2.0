@@ -1,0 +1,12 @@
+// Shell subsystem barrel - promotes src/utils/shell/ to src/shell/
+export * from './bashProvider.js'
+export * from './externalCommandValidation.js'
+export * from './outputLimits.js'
+export * from './powershellDetection.js'
+export * from './powershellProvider.js'
+export * from './prefix.js'
+export * from './readOnlyCommandValidation.js'
+export * from './resolveDefaultShell.js'
+export * from './shellProvider.js'
+export * from './shellToolUtils.js'
+export * from './specPrefix.js'

@@ -57,7 +57,6 @@ import usage from './commands/usage/index.js'
 import theme from './commands/theme/index.js'
 import vim from './commands/vim/index.js'
 import { feature } from 'bun:bundle'
-// Dead code elimination: conditional imports
 /* eslint-disable @typescript-eslint/no-require-imports */
 const proactive =
   feature('BRIEF_MODE') || feature('ASSISTANT_MODE')
@@ -711,7 +710,7 @@ export async function getCommandBus(): Promise<
   import('./pipeline/CommandBus.js').CommandBus
 > {
   if (_commandBusCache) return _commandBusCache
-  const { createCommandBus } = await import('./pipeline/CommandBus.js')
+  const { CommandBus } = await import('./pipeline/CommandBus.js')
   const { LocalHandlerAdapter } = await import(
     './pipeline/handlers/LocalHandlerAdapter.js'
   )
@@ -721,7 +720,7 @@ export async function getCommandBus(): Promise<
   const { PromptHandlerAdapter } = await import(
     './pipeline/handlers/PromptHandlerAdapter.js'
   )
-  const bus = createCommandBus()
+  const bus = new CommandBus()
   const existingCommands = COMMANDS()
   const handlers = existingCommands
     .map(cmd => {
@@ -733,7 +732,7 @@ export async function getCommandBus(): Promise<
     .filter(
       (h): h is NonNullable<typeof h> => h !== null,
     )
-  bus.registerMany(handlers)
+  for (const handler of handlers) bus.register(handler)
   _commandBusCache = bus
   return bus
 }

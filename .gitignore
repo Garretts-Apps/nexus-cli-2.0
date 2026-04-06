@@ -3,3 +3,7 @@
 .copilot-logs/
 .omc/
 node_modules/
+
+# macOS sed backup files
+*-e
+.env.local

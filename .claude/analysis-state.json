@@ -1,0 +1,250 @@
+{
+  "projectName": "nexus-cli-2.0",
+  "version": "1.0",
+  "analyzedAt": "2026-04-06T01:30:00Z",
+  "targetDirectory": "/Users/garretteaglin/nexus-cli-2.0",
+  "summary": {
+    "totalFindings": 12,
+    "bySeverity": {
+      "CRITICAL": 4,
+      "HIGH": 4,
+      "MEDIUM": 3,
+      "LOW": 1
+    },
+    "byCategory": {
+      "ARCH": 7,
+      "CODE": 2,
+      "MAINT": 3
+    },
+    "totalEffortHours": 485,
+    "codebaseStats": {
+      "sourceFiles": 2027,
+      "totalLines": 522000,
+      "testCoverage": "0.45%",
+      "testFiles": 9,
+      "largestFiles": 12,
+      "orphanedFiles": 568
+    }
+  },
+  "findings": [
+    {
+      "id": "ARCH-001",
+      "category": "ARCH",
+      "severity": "CRITICAL",
+      "title": "Monolithic entry point (main.tsx) at 4,694 lines",
+      "description": "main.tsx serves as CLI parser, startup orchestrator, configuration resolver, authentication flow, feature gate evaluator, and session launcher all in one file. It imports from 60+ modules and uses lazy require() hacks to break circular dependencies. This single file is the chokepoint for every startup path.",
+      "location": "src/main.tsx:1-4694",
+      "impact": "Impossible to test startup paths in isolation. Any change to startup order risks regressions across all entry modes. Import-time side effects make module loading order-dependent.",
+      "remediation": "Decompose into discrete startup phases: (1) CLI parsing, (2) configuration resolution, (3) authentication, (4) feature gating, (5) session launch. Each phase should be an independent module with its own tests.",
+      "effort": "XL",
+      "effortHours": "80-120 hours",
+      "dependencies": ["ARCH-002", "ARCH-003"],
+      "status": "pending"
+    },
+    {
+      "id": "ARCH-002",
+      "category": "ARCH",
+      "severity": "CRITICAL",
+      "title": "God Object: bootstrap/state.ts with 60+ exported functions",
+      "description": "bootstrap/state.ts (1,105 lines) holds session IDs, CWD tracking, cost/token accounting, telemetry providers, hook registrations, and stats stores as module-level mutable variables. This creates massive coupling where nearly every module depends on it.",
+      "location": "src/bootstrap/state.ts:49-569+",
+      "impact": "Any module importing bootstrap/state joins a strongly connected component, making circular dependencies inevitable. State mutation is untracked. Testing requires resetStateForTests() resetting 20+ variables.",
+      "remediation": "Continue the ARCH-002 extraction: split into CostTracker, SessionIdentity, TelemetryProviders, HookRegistry, and InteractionTimer modules. Each should own its state and expose a narrow interface.",
+      "effort": "XL",
+      "effortHours": "100-150 hours",
+      "dependencies": ["ARCH-003"],
+      "status": "pending"
+    },
+    {
+      "id": "ARCH-003",
+      "category": "ARCH",
+      "severity": "HIGH",
+      "title": "Pervasive circular dependency workarounds (45 require() calls across 20 files)",
+      "description": "The codebase uses dynamic require() as circuit breaker for circular imports across 45 locations in 20 files. Key cycles include main.tsx ↔ AppState.tsx ↔ teammate.ts, auth.ts in large SCC with settings, and compact modules.",
+      "location": "src/main.tsx:68-81, src/state/AppStateStore.ts:406, src/services/compact/microCompact.ts:34, and 17 other files",
+      "impact": "Dynamic require() defeats tree-shaking and bundle optimization. Module initialization order becomes fragile. Dependency analysis tools cannot understand the graph.",
+      "remediation": "Map the full SCC using madge tool. Extract shared types into leaf modules. Use dependency injection or event-based decoupling for auth ↔ settings and compact ↔ promptCache cycles.",
+      "effort": "L",
+      "effortHours": "40-60 hours",
+      "dependencies": ["ARCH-002"],
+      "status": "pending"
+    },
+    {
+      "id": "ARCH-004",
+      "category": "ARCH",
+      "severity": "HIGH",
+      "title": "Undifferentiated utils directory: 588 files, 348 top-level exports",
+      "description": "src/utils/ mixes bash parsing, authentication, permissions, plugins, settings, shell operations, and model management in one flat namespace. No meaningful encapsulation boundary exists.",
+      "location": "src/utils/",
+      "impact": "No clear alternative to utils/ when adding new code, accelerating its growth. Import paths blur subsystem boundaries. High-coupling surface prevents splitting.",
+      "remediation": "Promote major subsystems to top-level: src/bash/, src/auth/, src/permissions/, src/plugins/, src/settings/. Keep utils/ for true leaf utilities (array, format, string).",
+      "effort": "L",
+      "effortHours": "50-80 hours",
+      "dependencies": [],
+      "status": "pending"
+    },
+    {
+      "id": "ARCH-005",
+      "category": "CODE",
+      "severity": "CRITICAL",
+      "title": "Near-zero test coverage: 9 test files for 2,018 source files (0.45%)",
+      "description": "Only 9 test files exist. Zero tests cover query engine, tool execution, state management, pipeline, MCP client, API client (3,422 lines), permission system (2,640 lines), or any React components.",
+      "location": "src/ (9 test files only)",
+      "impact": "Refactoring is unsafe. Security-critical code (permissions, bash security) has zero automated verification. The vitest config is properly set up but unused.",
+      "remediation": "Prioritize tests by risk: (1) bashPermissions.ts / bashSecurity.ts -- security-critical, (2) bootstrap/state.ts -- most-coupled, (3) QueryEngine.ts -- core business logic. Target 40% coverage on critical paths before refactoring.",
+      "effort": "XL",
+      "effortHours": "120-200 hours",
+      "dependencies": [],
+      "status": "pending"
+    },
+    {
+      "id": "ARCH-006",
+      "category": "CODE",
+      "severity": "HIGH",
+      "title": "Security-critical code duplication: 5,706 lines across 3 files",
+      "description": "Three implementations of read-only validation exist: BashTool/readOnlyValidation.ts (1,990 lines), PowerShellTool/readOnlyValidation.ts (1,823 lines), utils/shell/readOnlyCommandValidation.ts (1,893 lines). Plus bashPermissions.ts (2,640) and bashSecurity.ts (2,639) duplication.",
+      "location": "src/tools/BashTool/readOnlyValidation.ts, src/tools/PowerShellTool/readOnlyValidation.ts, src/utils/shell/readOnlyCommandValidation.ts",
+      "impact": "Security policy changes must be applied to 3 files simultaneously or validation becomes inconsistent. A bypass fixed in one file but not others creates exploitable gaps.",
+      "remediation": "Extract ShellValidationEngine with shell-specific strategy adapters (BashStrategy, PowerShellStrategy). Core validation logic in one place, shell-specific syntax via adapters.",
+      "effort": "L",
+      "effortHours": "40-60 hours",
+      "dependencies": ["ARCH-005"],
+      "status": "pending"
+    },
+    {
+      "id": "MAINT-001",
+      "category": "MAINT",
+      "severity": "HIGH",
+      "title": "568 orphaned sed backup files (*-e) polluting source tree",
+      "description": "568 files with -e suffix exist (artifacts from macOS sed -i operations). They appear in git status and confuse code search tools.",
+      "location": "src/utils/*.ts-e (568 files throughout)",
+      "impact": "Pollutes git status. Confuses code search. Inflates file counts. May cause import resolution ambiguity.",
+      "remediation": "Delete: find src -name '*-e' -delete. Add '*-e' to .gitignore. Fix sed invocation pattern in scripts.",
+      "effort": "XS",
+      "effortHours": "0.5-1 hour",
+      "dependencies": [],
+      "status": "pending"
+    },
+    {
+      "id": "MAINT-002",
+      "category": "MAINT",
+      "severity": "MEDIUM",
+      "title": "12 files exceeding 3,000 lines, totaling ~45,000 lines in hotspots",
+      "description": "Files exceeding 3,000 lines: cli/print.ts (5,596), utils/sessionStorage.ts (5,089), utils/hooks.ts (5,022), screens/REPL.tsx (4,996), main.tsx (4,694), utils/bash/bashParser.ts (4,436), utils/attachments.ts (3,997), and 5 others.",
+      "location": "Multiple files as listed",
+      "impact": "Large files have higher defect density, longer review times, and more merge conflicts. Functions within become tightly coupled to file-level state.",
+      "remediation": "Prioritize splitting high-churn files. Start with utils/hooks.ts (5,022 lines) and cli/print.ts (5,596) which likely contain many independent implementations.",
+      "effort": "M",
+      "effortHours": "30-50 hours",
+      "dependencies": ["ARCH-004"],
+      "status": "pending"
+    },
+    {
+      "id": "MAINT-003",
+      "category": "MAINT",
+      "severity": "MEDIUM",
+      "title": "Dual state management with unclear boundaries",
+      "description": "Three co-existing state systems: (1) bootstrap/state.ts mutable singleton, (2) state/sessionConfig.ts extracted model/config, (3) AppStateStore.ts React-compatible immutable store. cost-tracker.ts re-exports 20+ symbols masking real dependency.",
+      "location": "src/bootstrap/state.ts, src/state/sessionConfig.ts, src/state/AppStateStore.ts, src/cost-tracker.ts",
+      "impact": "Unclear which state system to use for given data. bootstrap singleton not observable, so UI components must poll. cost-tracker proxy creates transitive coupling.",
+      "remediation": "Migrate bootstrap/state.ts fields into store.ts pattern. This enables reactive updates and eliminates cost-tracker proxy. sessionConfig.ts extraction provides template.",
+      "effort": "L",
+      "effortHours": "40-60 hours",
+      "dependencies": ["ARCH-002"],
+      "status": "pending"
+    },
+    {
+      "id": "ARCH-007",
+      "category": "ARCH",
+      "severity": "MEDIUM",
+      "title": "Import-time side effects in entry point create fragile initialization",
+      "description": "main.tsx lines 9-20 execute side effects during import: profileCheckpoint(), startMdmRawRead(), startKeychainPrefetch(). These launch parallel I/O but create implicit ordering constraints.",
+      "location": "src/main.tsx:9-20",
+      "impact": "Moving imports would break profiling. Bundler optimizations could silently change behavior. eslint-disable comments acknowledge violation of project's own rule.",
+      "remediation": "Extract initialization into explicit bootstrap() function. Import modules but defer execution. Preserves parallel I/O optimization while making ordering explicit and testable.",
+      "effort": "S",
+      "effortHours": "4-8 hours",
+      "dependencies": [],
+      "status": "pending"
+    },
+    {
+      "id": "CODE-001",
+      "category": "CODE",
+      "severity": "MEDIUM",
+      "title": "Well-designed pipeline pattern underutilized",
+      "description": "src/pipeline/ implements proper CommandBus with middleware, context, and routing. However, main query loop (query.ts 1,729 lines) and QueryEngine.ts (1,295 lines) operate independently, suggesting incomplete adoption.",
+      "location": "src/pipeline/, src/query.ts, src/QueryEngine.ts",
+      "impact": "Two execution models coexist. New features must choose which, existing features don't benefit from pipeline middleware (logging, metrics, error handling).",
+      "remediation": "Audit which flows use pipeline vs direct calls. Create migration plan to route query.ts through pipeline. Pipeline middleware can subsume scattered cross-cutting concerns.",
+      "effort": "L",
+      "effortHours": "50-80 hours",
+      "dependencies": [],
+      "status": "pending"
+    },
+    {
+      "id": "CODE-002",
+      "category": "CODE",
+      "severity": "LOW",
+      "title": "Moderate type safety: 31 'as any' casts, 13 ts-ignore suppressions",
+      "description": "31 'as any' casts across 21 files and 13 @ts-ignore/@ts-expect-error suppressions across 4 files (concentrated in src/ink/ rendering). For 522K-line codebase with strict mode, relatively low but ink/ concentration suggests gaps.",
+      "location": "src/ink/render-to-screen.ts (5), src/ink/ink.tsx (6), and scattered across 21 other files",
+      "impact": "ink/ suppressions in rendering code could cause silent visual bugs. API adapter casts could mask contract violations.",
+      "remediation": "Address ink/ by improving type definitions for custom React reconciler. Address API adapters with proper discriminated union types for provider responses.",
+      "effort": "M",
+      "effortHours": "20-30 hours",
+      "dependencies": [],
+      "status": "pending"
+    }
+  ],
+  "recommendations": [
+    {
+      "priority": 1,
+      "title": "Delete 568 orphaned -e files and add to .gitignore",
+      "effort": "XS",
+      "effortHours": "0.5-1",
+      "impact": "Immediate noise reduction, zero risk"
+    },
+    {
+      "priority": 2,
+      "title": "Write tests for security-critical paths",
+      "effort": "L",
+      "effortHours": "40-60",
+      "impact": "Required before any refactoring of security code"
+    },
+    {
+      "priority": 3,
+      "title": "Consolidate security-critical code duplication",
+      "effort": "L",
+      "effortHours": "40-60",
+      "impact": "Eliminates most dangerous duplication"
+    },
+    {
+      "priority": 4,
+      "title": "Complete ARCH-002 state extraction",
+      "effort": "XL",
+      "effortHours": "100-150",
+      "impact": "Continue decomposing bootstrap/state.ts following sessionConfig.ts template"
+    },
+    {
+      "priority": 5,
+      "title": "Map and resolve circular dependency graph",
+      "effort": "L",
+      "effortHours": "40-60",
+      "impact": "Prerequisite for all other structural changes"
+    },
+    {
+      "priority": 6,
+      "title": "Decompose main.tsx into startup phases",
+      "effort": "XL",
+      "effortHours": "80-120",
+      "impact": "Enables isolated testing of startup paths"
+    },
+    {
+      "priority": 7,
+      "title": "Promote utils/ subsystems to top-level modules",
+      "effort": "L",
+      "effortHours": "50-80",
+      "impact": "Establishes proper encapsulation boundaries"
+    }
+  ]
+}

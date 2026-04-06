@@ -4,9 +4,12 @@ import type { LoggerProvider } from '@opentelemetry/sdk-logs'
 import type { MeterProvider } from '@opentelemetry/sdk-metrics'
 import type { BasicTracerProvider } from '@opentelemetry/sdk-trace-base'
 import { realpathSync } from 'fs'
-import sumBy from 'lodash-es/sumBy.js'
 import { cwd } from 'process'
-import type { HookEvent, ModelUsage } from 'src/entrypoints/agentSdkTypes.js'
+import { HOOK_EVENTS } from 'src/entrypoints/agentSdkTypes.js'
+import type { ModelUsageSchema } from 'src/entrypoints/sdk/coreSchemas.js'
+import type { z } from 'zod/v4'
+type HookEvent = (typeof HOOK_EVENTS)[number]
+type ModelUsage = z.infer<ReturnType<typeof ModelUsageSchema>>
 import type { AgentColorName } from 'src/tools/AgentTool/agentColorManager.js'
 import type { HookCallbackMatcher } from 'src/types/hooks.js'
 // Indirection for browser-sdk build (package.json "browser" field swaps
@@ -33,13 +36,54 @@ import { resetApiDebugState } from 'src/state/apiDebug.js'
 // Tier 2 session configuration state (used by resetStateForTests + internal refs)
 // eslint-disable-next-line custom-rules/bootstrap-isolation
 import {
-  addModelUsageEntry,
   getClientType as getClientType_sc,
-  getModelUsage as getModelUsage_sc,
   resetSessionConfigState,
-  setModelUsage,
   setSessionProjectDir as setSessionProjectDir_sc,
 } from 'src/state/sessionConfig.js'
+// Tier 3 volatile metrics state (cost, duration, token counts, turn counters)
+// eslint-disable-next-line custom-rules/bootstrap-isolation
+import {
+  addToTotalDurationState as metricsAddToTotalDurationState,
+  addToTotalCostState as metricsAddToTotalCostState,
+  getTotalCostUSD as metricsGetTotalCostUSD,
+  getTotalAPIDuration as metricsGetTotalAPIDuration,
+  getTotalDuration as metricsGetTotalDuration,
+  getTotalAPIDurationWithoutRetries as metricsGetTotalAPIDurationWithoutRetries,
+  getTotalToolDuration as metricsGetTotalToolDuration,
+  addToToolDuration as metricsAddToToolDuration,
+  getTurnHookDurationMs as metricsGetTurnHookDurationMs,
+  addToTurnHookDuration as metricsAddToTurnHookDuration,
+  resetTurnHookDuration as metricsResetTurnHookDuration,
+  getTurnHookCount as metricsGetTurnHookCount,
+  getTurnToolDurationMs as metricsGetTurnToolDurationMs,
+  resetTurnToolDuration as metricsResetTurnToolDuration,
+  getTurnToolCount as metricsGetTurnToolCount,
+  getTurnClassifierDurationMs as metricsGetTurnClassifierDurationMs,
+  addToTurnClassifierDuration as metricsAddToTurnClassifierDuration,
+  resetTurnClassifierDuration as metricsResetTurnClassifierDuration,
+  getTurnClassifierCount as metricsGetTurnClassifierCount,
+  updateLastInteractionTime as metricsUpdateLastInteractionTime,
+  flushInteractionTime as metricsFlushInteractionTime,
+  getLastInteractionTime as metricsGetLastInteractionTime,
+  addToTotalLinesChanged as metricsAddToTotalLinesChanged,
+  getTotalLinesAdded as metricsGetTotalLinesAdded,
+  getTotalLinesRemoved as metricsGetTotalLinesRemoved,
+  getTotalInputTokens as metricsGetTotalInputTokens,
+  getTotalOutputTokens as metricsGetTotalOutputTokens,
+  getTotalCacheReadInputTokens as metricsGetTotalCacheReadInputTokens,
+  getTotalCacheCreationInputTokens as metricsGetTotalCacheCreationInputTokens,
+  getTotalWebSearchRequests as metricsGetTotalWebSearchRequests,
+  getTurnOutputTokens as metricsGetTurnOutputTokens,
+  getCurrentTurnTokenBudget as metricsGetCurrentTurnTokenBudget,
+  snapshotOutputTokensForTurn as metricsSnapshotOutputTokensForTurn,
+  getBudgetContinuationCount as metricsGetBudgetContinuationCount,
+  incrementBudgetContinuationCount as metricsIncrementBudgetContinuationCount,
+  setHasUnknownModelCost as metricsSetHasUnknownModelCost,
+  hasUnknownModelCost as metricsHasUnknownModelCost,
+  resetCostState as metricsResetCostState,
+  setCostStateForRestore as metricsSetCostStateForRestore,
+  resetMetricsState,
+} from 'src/state/metrics.js'
 
 // Union type for registered hooks - can be SDK callbacks or native plugin hooks
 type RegisteredHookMatcher = HookCallbackMatcher | PluginHookMatcher
@@ -360,14 +404,11 @@ export function addToTotalDurationState(
   duration: number,
   durationWithoutRetries: number,
 ): void {
-  STATE.totalAPIDuration += duration
-  STATE.totalAPIDurationWithoutRetries += durationWithoutRetries
+  metricsAddToTotalDurationState(duration, durationWithoutRetries)
 }
 
 export function resetTotalDurationStateAndCost_FOR_TESTS_ONLY(): void {
-  STATE.totalAPIDuration = 0
-  STATE.totalAPIDurationWithoutRetries = 0
-  STATE.totalCostUSD = 0
+  metricsResetCostState()
 }
 
 export function addToTotalCostState(
@@ -375,83 +416,75 @@ export function addToTotalCostState(
   modelUsage: ModelUsage,
   model: string,
 ): void {
-  addModelUsageEntry(model, modelUsage)
-  STATE.totalCostUSD += cost
+  metricsAddToTotalCostState(cost, modelUsage, model)
 }
 
 export function getTotalCostUSD(): number {
-  return STATE.totalCostUSD
+  return metricsGetTotalCostUSD()
 }
 
 export function getTotalAPIDuration(): number {
-  return STATE.totalAPIDuration
+  return metricsGetTotalAPIDuration()
 }
 
 export function getTotalDuration(): number {
-  return Date.now() - STATE.startTime
+  return metricsGetTotalDuration()
 }
 
 export function getTotalAPIDurationWithoutRetries(): number {
-  return STATE.totalAPIDurationWithoutRetries
+  return metricsGetTotalAPIDurationWithoutRetries()
 }
 
 export function getTotalToolDuration(): number {
-  return STATE.totalToolDuration
+  return metricsGetTotalToolDuration()
 }
 
 export function addToToolDuration(duration: number): void {
-  STATE.totalToolDuration += duration
-  STATE.turnToolDurationMs += duration
-  STATE.turnToolCount++
+  metricsAddToToolDuration(duration)
 }
 
 export function getTurnHookDurationMs(): number {
-  return STATE.turnHookDurationMs
+  return metricsGetTurnHookDurationMs()
 }
 
 export function addToTurnHookDuration(duration: number): void {
-  STATE.turnHookDurationMs += duration
-  STATE.turnHookCount++
+  metricsAddToTurnHookDuration(duration)
 }
 
 export function resetTurnHookDuration(): void {
-  STATE.turnHookDurationMs = 0
-  STATE.turnHookCount = 0
+  metricsResetTurnHookDuration()
 }
 
 export function getTurnHookCount(): number {
-  return STATE.turnHookCount
+  return metricsGetTurnHookCount()
 }
 
 export function getTurnToolDurationMs(): number {
-  return STATE.turnToolDurationMs
+  return metricsGetTurnToolDurationMs()
 }
 
 export function resetTurnToolDuration(): void {
-  STATE.turnToolDurationMs = 0
-  STATE.turnToolCount = 0
+  metricsResetTurnToolDuration()
 }
 
 export function getTurnToolCount(): number {
-  return STATE.turnToolCount
+  return metricsGetTurnToolCount()
 }
 
 export function getTurnClassifierDurationMs(): number {
-  return STATE.turnClassifierDurationMs
+  return metricsGetTurnClassifierDurationMs()
 }
 
 export function addToTurnClassifierDuration(duration: number): void {
-  STATE.turnClassifierDurationMs += duration
-  STATE.turnClassifierCount++
+  metricsAddToTurnClassifierDuration(duration)
 }
 
 export function resetTurnClassifierDuration(): void {
-  STATE.turnClassifierDurationMs = 0
-  STATE.turnClassifierCount = 0
+  metricsResetTurnClassifierDuration()
 }
 
 export function getTurnClassifierCount(): number {
-  return STATE.turnClassifierCount
+  return metricsGetTurnClassifierCount()
 }
 
 export function getStatsStore(): {
@@ -478,14 +511,8 @@ export function setStatsStore(
  * Without it the timestamp stays stale until the next render, which may never
  * come if the user is idle (e.g. permission dialog waiting for input).
  */
-let interactionTimeDirty = false
-
 export function updateLastInteractionTime(immediate?: boolean): void {
-  if (immediate) {
-    flushInteractionTime_inner()
-  } else {
-    interactionTimeDirty = true
-  }
+  metricsUpdateLastInteractionTime(immediate)
 }
 
 /**
@@ -494,76 +521,63 @@ export function updateLastInteractionTime(immediate?: boolean): void {
  * a single Date.now() call.
  */
 export function flushInteractionTime(): void {
-  if (interactionTimeDirty) {
-    flushInteractionTime_inner()
-  }
-}
-
-function flushInteractionTime_inner(): void {
-  STATE.lastInteractionTime = Date.now()
-  interactionTimeDirty = false
+  metricsFlushInteractionTime()
 }
 
 export function addToTotalLinesChanged(added: number, removed: number): void {
-  STATE.totalLinesAdded += added
-  STATE.totalLinesRemoved += removed
+  metricsAddToTotalLinesChanged(added, removed)
 }
 
 export function getTotalLinesAdded(): number {
-  return STATE.totalLinesAdded
+  return metricsGetTotalLinesAdded()
 }
 
 export function getTotalLinesRemoved(): number {
-  return STATE.totalLinesRemoved
+  return metricsGetTotalLinesRemoved()
 }
 
 export function getTotalInputTokens(): number {
-  return sumBy(Object.values(getModelUsage_sc()), 'inputTokens')
+  return metricsGetTotalInputTokens()
 }
 
 export function getTotalOutputTokens(): number {
-  return sumBy(Object.values(getModelUsage_sc()), 'outputTokens')
+  return metricsGetTotalOutputTokens()
 }
 
 export function getTotalCacheReadInputTokens(): number {
-  return sumBy(Object.values(getModelUsage_sc()), 'cacheReadInputTokens')
+  return metricsGetTotalCacheReadInputTokens()
 }
 
 export function getTotalCacheCreationInputTokens(): number {
-  return sumBy(Object.values(getModelUsage_sc()), 'cacheCreationInputTokens')
+  return metricsGetTotalCacheCreationInputTokens()
 }
 
 export function getTotalWebSearchRequests(): number {
-  return sumBy(Object.values(getModelUsage_sc()), 'webSearchRequests')
+  return metricsGetTotalWebSearchRequests()
 }
 
-let outputTokensAtTurnStart = 0
-let currentTurnTokenBudget: number | null = null
 export function getTurnOutputTokens(): number {
-  return getTotalOutputTokens() - outputTokensAtTurnStart
+  return metricsGetTurnOutputTokens()
 }
 export function getCurrentTurnTokenBudget(): number | null {
-  return currentTurnTokenBudget
+  return metricsGetCurrentTurnTokenBudget()
 }
-let budgetContinuationCount = 0
 export function snapshotOutputTokensForTurn(budget: number | null): void {
-  outputTokensAtTurnStart = getTotalOutputTokens()
-  currentTurnTokenBudget = budget
-  budgetContinuationCount = 0
+  metricsSnapshotOutputTokensForTurn(budget)
 }
 export function getBudgetContinuationCount(): number {
-  return budgetContinuationCount
+  return metricsGetBudgetContinuationCount()
 }
 export function incrementBudgetContinuationCount(): void {
-  budgetContinuationCount++
+  metricsIncrementBudgetContinuationCount()
 }
 
 export function setHasUnknownModelCost(): void {
-  STATE.hasUnknownModelCost = true
+  metricsSetHasUnknownModelCost()
 }
 
 export function hasUnknownModelCost(): boolean {
-  return STATE.hasUnknownModelCost
+  return metricsHasUnknownModelCost()
 }
 
 export function getLastMainRequestId(): string | undefined {
@@ -583,19 +597,11 @@ export function setLastApiCompletionTimestamp(timestamp: number): void {
 }
 
 export function getLastInteractionTime(): number {
-  return STATE.lastInteractionTime
+  return metricsGetLastInteractionTime()
 }
 
 export function resetCostState(): void {
-  STATE.totalCostUSD = 0
-  STATE.totalAPIDuration = 0
-  STATE.totalAPIDurationWithoutRetries = 0
-  STATE.totalToolDuration = 0
-  STATE.startTime = Date.now()
-  STATE.totalLinesAdded = 0
-  STATE.totalLinesRemoved = 0
-  STATE.hasUnknownModelCost = false
-  setModelUsage({})
+  metricsResetCostState()
   STATE.promptId = null
 }
 
@@ -622,22 +628,16 @@ export function setCostStateForRestore({
   lastDuration: number | undefined
   modelUsage: { [modelName: string]: ModelUsage } | undefined
 }): void {
-  STATE.totalCostUSD = totalCostUSD
-  STATE.totalAPIDuration = totalAPIDuration
-  STATE.totalAPIDurationWithoutRetries = totalAPIDurationWithoutRetries
-  STATE.totalToolDuration = totalToolDuration
-  STATE.totalLinesAdded = totalLinesAdded
-  STATE.totalLinesRemoved = totalLinesRemoved
-
-  // Restore per-model usage breakdown
-  if (modelUsage) {
-    setModelUsage(modelUsage)
-  }
-
-  // Adjust startTime to make wall duration accumulate
-  if (lastDuration) {
-    STATE.startTime = Date.now() - lastDuration
-  }
+  metricsSetCostStateForRestore({
+    totalCostUSD,
+    totalAPIDuration,
+    totalAPIDurationWithoutRetries,
+    totalToolDuration,
+    totalLinesAdded,
+    totalLinesRemoved,
+    lastDuration,
+    modelUsage,
+  })
 }
 
 // Only used in tests
@@ -648,10 +648,9 @@ export function resetStateForTests(): void {
   Object.entries(getInitialState()).forEach(([key, value]) => {
     STATE[key as keyof State] = value as never
   })
-  outputTokensAtTurnStart = 0
-  currentTurnTokenBudget = null
-  budgetContinuationCount = 0
   sessionSwitched.clear()
+  // Reset extracted Tier 3 metrics state (cost, duration, token counts, turn counters)
+  resetMetricsState()
   // Reset extracted Tier 4 auxiliary state modules
   resetCronState()
   resetTeamState()
@@ -929,7 +928,9 @@ export function registerHookCallbacks(
     if (!STATE.registeredHooks[eventKey]) {
       STATE.registeredHooks[eventKey] = []
     }
-    STATE.registeredHooks[eventKey]!.push(...matchers)
+    if (matchers) {
+      STATE.registeredHooks[eventKey]!.push(...matchers)
+    }
   }
 }
 
@@ -951,7 +952,9 @@ export function clearRegisteredPluginHooks(): void {
   const filtered: Partial<Record<HookEvent, RegisteredHookMatcher[]>> = {}
   for (const [event, matchers] of Object.entries(STATE.registeredHooks)) {
     // Keep only callback hooks (those without pluginRoot)
-    const callbackHooks = matchers.filter(m => !('pluginRoot' in m))
+    const matcherList = matchers as RegisteredHookMatcher[] | undefined
+    if (!matcherList) continue
+    const callbackHooks = matcherList.filter(m => !('pluginRoot' in m))
     if (callbackHooks.length > 0) {
       filtered[event as HookEvent] = callbackHooks
     }

@@ -56,6 +56,45 @@ export interface StreamEvent {
   content_block?: { type: string }
 }
 
+// Provider-specific raw response shapes used internally for type-safe normalization
+
+interface ClaudeRawResponse {
+  id?: string
+  content?: Array<{ text?: string }> | string
+  stop_reason?: string
+  usage?: { input_tokens?: number; output_tokens?: number }
+  model?: string
+}
+
+interface GeminiRawResponse {
+  id?: string
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> }
+    finishReason?: string
+  }>
+  usageMetadata?: {
+    promptTokenCount?: number
+    candidatesTokenCount?: number
+    totalTokenCount?: number
+  }
+}
+
+interface OpenAIRawChoice {
+  message?: { role?: string; content?: string }
+  finish_reason?: string
+}
+
+interface OpenAIRawResponse {
+  id?: string
+  choices?: OpenAIRawChoice[]
+  usage?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+    total_tokens?: number
+  }
+  model?: string
+}
+
 /**
  * Gets the API provider configuration from environment variables or state
  */
@@ -128,7 +167,7 @@ export function normalizeRequestForProvider(
   const baseRequest = {
     messages: messages.map(msg => ({
       role: msg.role,
-      content: typeof msg.content === 'string' ? msg.content : msg.content,
+      content: msg.content,
     })),
     system: systemPrompt,
     model: config.model,
@@ -179,79 +218,77 @@ export function normalizeResponseFromProvider(
 ): UnifiedAPIResponse {
   switch (config.provider) {
     case 'claude': {
-      const claudeResponse = response as any
+      const claudeResponse = response as ClaudeRawResponse
+      const contentText = Array.isArray(claudeResponse.content)
+        ? claudeResponse.content[0]?.text ?? ''
+        : claudeResponse.content ?? ''
       return {
-        id: claudeResponse.id || '',
+        id: claudeResponse.id ?? '',
         choices: [
           {
             message: {
               role: 'assistant',
-              content:
-                claudeResponse.content?.[0]?.text ||
-                claudeResponse.content ||
-                '',
+              content: contentText,
             },
-            finish_reason: claudeResponse.stop_reason || 'end_turn',
+            finish_reason: claudeResponse.stop_reason ?? 'end_turn',
           },
         ],
         usage: {
-          prompt_tokens: claudeResponse.usage?.input_tokens || 0,
-          completion_tokens: claudeResponse.usage?.output_tokens || 0,
+          prompt_tokens: claudeResponse.usage?.input_tokens ?? 0,
+          completion_tokens: claudeResponse.usage?.output_tokens ?? 0,
           total_tokens:
-            (claudeResponse.usage?.input_tokens || 0) +
-            (claudeResponse.usage?.output_tokens || 0),
+            (claudeResponse.usage?.input_tokens ?? 0) +
+            (claudeResponse.usage?.output_tokens ?? 0),
         },
-        model: claudeResponse.model || config.model || '',
+        model: claudeResponse.model ?? config.model ?? '',
       }
     }
 
     case 'gemini': {
-      const geminiResponse = response as any
+      const geminiResponse = response as GeminiRawResponse
       return {
-        id: geminiResponse.id || '',
+        id: geminiResponse.id ?? '',
         choices: [
           {
             message: {
               role: 'assistant',
               content:
-                geminiResponse.candidates?.[0]?.content?.parts?.[0]?.text ||
+                geminiResponse.candidates?.[0]?.content?.parts?.[0]?.text ??
                 '',
             },
             finish_reason:
-              geminiResponse.candidates?.[0]?.finishReason ||
-              'STOP',
+              geminiResponse.candidates?.[0]?.finishReason ?? 'STOP',
           },
         ],
         usage: {
           prompt_tokens:
-            geminiResponse.usageMetadata?.promptTokenCount || 0,
+            geminiResponse.usageMetadata?.promptTokenCount ?? 0,
           completion_tokens:
-            geminiResponse.usageMetadata?.candidatesTokenCount || 0,
-          total_tokens: geminiResponse.usageMetadata?.totalTokenCount || 0,
+            geminiResponse.usageMetadata?.candidatesTokenCount ?? 0,
+          total_tokens: geminiResponse.usageMetadata?.totalTokenCount ?? 0,
         },
-        model: config.model || '',
+        model: config.model ?? '',
       }
     }
 
     case 'openai': {
-      const openaiResponse = response as any
+      const openaiResponse = response as OpenAIRawResponse
       return {
-        id: openaiResponse.id || '',
+        id: openaiResponse.id ?? '',
         choices:
-          openaiResponse.choices?.map((choice: any) => ({
+          openaiResponse.choices?.map((choice: OpenAIRawChoice) => ({
             message: {
-              role: choice.message?.role || 'assistant',
-              content: choice.message?.content || '',
+              role: choice.message?.role ?? 'assistant',
+              content: choice.message?.content ?? '',
             },
-            finish_reason: choice.finish_reason || 'stop',
-          })) || [],
+            finish_reason: choice.finish_reason ?? 'stop',
+          })) ?? [],
         usage: {
-          prompt_tokens: openaiResponse.usage?.prompt_tokens || 0,
-          completion_tokens:
-            openaiResponse.usage?.completion_tokens || 0,
-          total_tokens: openaiResponse.usage?.total_tokens || 0,
+          prompt_tokens: openaiResponse.usage?.prompt_tokens ?? 0,
+          completion_tokens: openaiResponse.usage?.completion_tokens ?? 0,
+          total_tokens: openaiResponse.usage?.total_tokens ?? 0,
         },
-        model: openaiResponse.model || config.model || '',
+        model: openaiResponse.model ?? config.model ?? '',
       }
     }
 

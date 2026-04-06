@@ -2,7 +2,9 @@
 // Extracted from src/bootstrap/state.ts (ARCH-002 Phase 2).
 
 import sumBy from 'lodash-es/sumBy.js'
-import type { ModelUsage } from 'src/entrypoints/agentSdkTypes.js'
+import type { ModelUsageSchema } from 'src/entrypoints/sdk/coreSchemas.js'
+import type { z } from 'zod/v4'
+type ModelUsage = z.infer<ReturnType<typeof ModelUsageSchema>>
 
 // ── Metrics state ──
 
